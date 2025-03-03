@@ -1,4 +1,4 @@
-
+# app.py
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -11,10 +11,8 @@ from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 
-
 load_dotenv()
-
-
+# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -34,11 +32,11 @@ class CDPSupportAgent:
             "zeotap": "https://docs.zeotap.com/home/en-us/"
         }
         
-        
+        # Create cache directory if it doesn't exist
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         
-        
+        # Load or scrape documentation 
         self.documentation = self.load_documentation()
 
     def load_documentation(self) -> Dict[str, List[Dict]]:
@@ -55,7 +53,7 @@ class CDPSupportAgent:
             else:
                 logger.info(f"Scraping {cdp} documentation from {url}")
                 all_docs[cdp] = self.scrape_documentation(cdp, url)
-                
+                # Save to cache
                 with open(cache_file, 'w', encoding='utf-8') as f:
                     json.dump(all_docs[cdp], f, ensure_ascii=False, indent=2)
         
@@ -67,8 +65,8 @@ class CDPSupportAgent:
         visited_urls = set()
         urls_to_visit = [base_url]
         
-        
-        max_pages = 50  
+        # Limit scraping to avoid overloading the server
+        max_pages = 50  # Reducing from 100 to 50 to make it faster
         count = 0
         
         base_domain = urlparse(base_url).netloc
@@ -91,53 +89,53 @@ class CDPSupportAgent:
                 
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
-                
+                # Extract content
                 title = soup.title.string if soup.title else "Untitled"
                 
-                
+                # Extract main content based on common documentation layouts
                 content_divs = soup.find_all(['div', 'article', 'main', 'section'], 
                                            class_=re.compile(r'(content|main|article|docs)'))
                 
                 if not content_divs:
-                    
+                    # Fallback to body if no specific content div is found
                     content_divs = [soup.body] if soup.body else []
                 
-                
+                # Extract text from the most relevant div or fallback to body
                 if content_divs:
                     content = max(content_divs, key=lambda x: len(x.get_text(strip=True).split())).get_text(strip=True)
                 else:
                     content = ""
                 
-                
+                # Skip pages with little or no content
                 if len(content.split()) < 20:
                     continue
                 
-                
+                # Create document
                 document = {
                     "title": title,
                     "url": current_url,
-                    "content": content[:8000],  
+                    "content": content[:8000],  # Limit content length
                     "cdp": cdp
                 }
                 
                 documents.append(document)
                 
-                
+                # Find more links to scrape
                 for link in soup.find_all('a', href=True):
                     href = link['href']
                     
-                    
+                    # Normalize URL
                     if href.startswith('/'):
-                        
+                        # Convert relative URL to absolute
                         parsed_base = urlparse(base_url)
                         next_url = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
                     elif href.startswith('http'):
                         next_url = href
                     else:
-                        
+                        # Skip fragment links, javascript, etc.
                         continue
                     
-                    
+                    # Only follow links to the same domain
                     if urlparse(next_url).netloc == base_domain:
                         if next_url not in visited_urls and next_url not in urls_to_visit:
                             urls_to_visit.append(next_url)
@@ -150,23 +148,23 @@ class CDPSupportAgent:
     
     def find_relevant_documents(self, query: str, cdp: Optional[str] = None) -> List[Dict]:
         """Find relevant documentation based on the query using Groq API"""
-        
+        # Identify the CDP if not provided
         if not cdp:
             for cdp_name in self.cdps.keys():
                 if cdp_name.lower() in query.lower():
                     cdp = cdp_name
                     break
         
-        
+        # If still no CDP identified, search across all
         docs_to_search = []
         if cdp:
             docs_to_search = self.documentation.get(cdp, [])
         else:
-            
+            # Search a limited number from each CDP
             for cdp_docs in self.documentation.values():
-                docs_to_search.extend(cdp_docs[:5])  
+                docs_to_search.extend(cdp_docs[:5])  # Top 5 docs from each CDP
         
-        
+        # Use Groq to rank documents by relevance
         try:
             doc_texts = [f"Title: {doc['title']}\nURL: {doc['url']}\nContent: {doc['content'][:500]}" 
                          for doc in docs_to_search]
@@ -174,7 +172,7 @@ class CDPSupportAgent:
             if not doc_texts:
                 return []
             
-            
+            # Combine into a single prompt to avoid multiple API calls
             documents_text = "\n\n---\n\n".join(doc_texts)
             prompt = f"""You are a search engine designed to find the most relevant documentation 
             for CDP (Customer Data Platform) questions. Given the following user query and document 
@@ -195,19 +193,19 @@ class CDPSupportAgent:
                 temperature=0
             )
             
-            
+            # Parse the response to get document indices
             indices_text = response.choices[0].message.content.strip()
             try:
                 indices = [int(idx.strip()) for idx in indices_text.split(',')]
                 return [docs_to_search[idx] for idx in indices if 0 <= idx < len(docs_to_search)]
             except (ValueError, IndexError):
                 logger.warning(f"Failed to parse document indices from: {indices_text}")
-                
+                # Fall back to first 3 documents
                 return docs_to_search[:min(3, len(docs_to_search))]
                 
         except Exception as e:
             logger.error(f"Error using Groq API for document retrieval: {str(e)}")
-            
+            # Fall back to first 3 documents
             return docs_to_search[:min(3, len(docs_to_search))]
     
     def is_cdp_related(self, query: str) -> bool:
@@ -220,7 +218,7 @@ class CDPSupportAgent:
             """
             
             response = self.groq_client.chat.completions.create(
-                model="llama3-8b-8192",  
+                model="llama3-8b-8192",  # Using smaller model for efficiency
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=10,
                 temperature=0
@@ -231,29 +229,29 @@ class CDPSupportAgent:
             
         except Exception as e:
             logger.error(f"Error checking if query is CDP-related: {str(e)}")
-            
+            # Fall back to simple keyword check
             cdp_terms = ["cdp", "customer data", "segment", "mparticle", "lytics", "zeotap"]
             return any(term in query.lower() for term in cdp_terms)
     
     def answer_question(self, query: str) -> str:
         """Answer a user question using Groq API and retrieved documentation"""
-        
+        # Check if query is relevant to CDPs
         if not self.is_cdp_related(query):
             return "I'm a CDP support agent focused on helping with questions about Segment, mParticle, Lytics, and Zeotap. Please ask a question related to these Customer Data Platforms."
         
-        
+        # Retrieve relevant documents
         relevant_docs = self.find_relevant_documents(query)
         
         if not relevant_docs:
             return "I couldn't find specific information about that in the CDP documentation. Could you please rephrase your question or provide more details?"
         
-        
+        # Prepare context from retrieved documents
         context = "\n\n---\n\n".join([
             f"CDP: {doc['cdp'].upper()}\nTitle: {doc['title']}\nURL: {doc['url']}\n\n{doc['content'][:2000]}" 
             for doc in relevant_docs
         ])
         
-        
+        # Generate answer using Groq
         try:
             prompt = f"""You are a helpful CDP (Customer Data Platform) support agent that specializes in 
             answering questions about Segment, mParticle, Lytics, and Zeotap. Use the following documentation 
@@ -282,13 +280,13 @@ class CDPSupportAgent:
             logger.error(f"Error generating answer with Groq API: {str(e)}")
             return f"I encountered an error while trying to answer your question. Please try again later. Error: {str(e)}"
 
-
+# Initialize Flask app
 app = Flask(__name__)
 
-
+# Create templates directory and templates
 os.makedirs('templates', exist_ok=True)
 
-
+# Create the HTML template
 with open('templates/index.html', 'w') as f:
     f.write('''
 <!DOCTYPE html>
@@ -300,7 +298,7 @@ with open('templates/index.html', 'w') as f:
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
-            background-color: 
+            background-color: #f8f9fa;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         .chat-container {
@@ -320,7 +318,7 @@ with open('templates/index.html', 'w') as f:
             text-align: center;
             margin-bottom: 20px;
             padding-bottom: 20px;
-            border-bottom: 1px solid 
+            border-bottom: 1px solid #e9ecef;
         }
         .messages-container {
             flex-grow: 1;
@@ -337,14 +335,14 @@ with open('templates/index.html', 'w') as f:
             word-wrap: break-word;
         }
         .user-message {
-            background-color: 
+            background-color: #007bff;
             color: white;
             align-self: flex-end;
             margin-left: auto;
         }
         .bot-message {
-            background-color: 
-            color: 
+            background-color: #e9ecef;
+            color: #212529;
             align-self: flex-start;
             margin-right: auto;
         }
@@ -385,18 +383,18 @@ with open('templates/index.html', 'w') as f:
             display: block;
             font-size: 0.8rem;
             margin-top: 5px;
-            color: 
+            color: #6c757d;
         }
         .info-box {
-            background-color: 
-            border-left: 5px solid 
+            background-color: #e7f3fe;
+            border-left: 5px solid #2196F3;
             padding: 15px;
             margin-bottom: 20px;
             border-radius: 5px;
         }
         pre {
             white-space: pre-wrap;
-            background-color: 
+            background-color: #f8f9fa;
             padding: 10px;
             border-radius: 5px;
             margin: 10px 0;
@@ -586,9 +584,9 @@ with open('templates/index.html', 'w') as f:
             });
             
             // Example question click handlers
-            document.querySelectorAll('
+            document.querySelectorAll('#example1, #example2, #example3, #example4, #example5').forEach(el => {
                 el.style.cursor = 'pointer';
-                el.style.color = '
+                el.style.color = '#007bff';
                 el.addEventListener('click', function() {
                     messageInput.value = this.textContent;
                     sendMessage();
@@ -600,7 +598,7 @@ with open('templates/index.html', 'w') as f:
 </html>
 ''')
 
-
+# Initialize the CDP Support Agent
 agent = None
 
 @app.before_request
@@ -610,7 +608,7 @@ def initialize_agent():
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             logger.error("GROQ_API_KEY environment variable not set")
-            
+            # Will be initialized on demand
         else:
             agent = CDPSupportAgent(api_key=api_key)
             logger.info("CDP Support Agent initialized successfully")
@@ -657,7 +655,7 @@ def ask():
         return jsonify({"answer": f"Sorry, an error occurred: {str(e)}"})
 
 if __name__ == '__main__':
-    
+    # Check if the API key is set
     if not os.environ.get("GROQ_API_KEY"):
         print("WARNING: GROQ_API_KEY environment variable not set.")
         print("Please set it with: export GROQ_API_KEY='your-api-key'")
