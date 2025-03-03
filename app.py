@@ -447,7 +447,7 @@ with open('templates/index.html', 'w') as f:
                 <ul>
                     <li id="example1">How do I set up a new source in Segment?</li>
                     <li id="example2">How can I create a user profile in mParticle?</li>
-                    <li id="example3">How do I build an audience segment in Lytics?</li>
+                    <li id="example3">how to build audience with Lytics?</li>
                     <li id="example4">How can I integrate my data with Zeotap?</li>
                     <li id="example5">How does Segment's audience creation compare to Lytics?</li>
                 </ul>
